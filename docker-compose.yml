@@ -1,0 +1,198 @@
+version: "3.8"
+services:
+  
+  traefik:
+    image: traefik:latest
+    container_name: "msapigabung-traefik"
+    command:
+      #- "--log.level=DEBUG" # <- Comment
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      # - "--entrypoints.websecure.address=:443" # <- HTTPS + TLS
+      # - "--entrypoints.web.http.redirections.entrypoint.to=websecure" # <- HTTPS
+      # - "--entrypoints.web.http.redirections.entrypoint.scheme=https" # <- HTTPS
+      # - "--certificatesresolvers.myresolver.acme.tlschallenge=true" # <- TLS
+      # - "--certificatesresolvers.myresolver.acme.httpchallenge=true" # <- HTTPS
+      # - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web" # <- HTTPS
+      #- "--certificatesresolvers.myresolver.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory" # <- Comment
+      # - "--certificatesresolvers.myresolver.acme.email=info@mediascanter.co.id" # <- HTTPS
+      # - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json" # <- HTTPS
+    ports:
+      - "80:80"
+      # - "443:443" # <- HTTPS + TLS
+      - "8080:8080" # <- HTTPS + TLS
+    restart: always
+    depends_on:
+      # - nginx
+      - php-apache
+    # healthcheck:
+    #   test: wget --quiet --tries=1 --spider http://localhost/ || exit 1
+    #   interval: 10s
+    #   timeout: 1s
+    #   retries: 3
+    #   start_period: 10s
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker/traefik/letsencrypt:/letsencrypt # <- HTTPS
+    networks:
+      - msnetwork
+
+  php-apache:
+    build:
+      args:
+        user: msapi
+        uid: 1000
+      context: .
+      dockerfile: ./docker/php-apache/Dockerfile
+    image: 'php-apache'
+    # container_name: phpgabung-apache
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.msapi-app.rule=Host(`localhost`)"
+      # - "traefik.http.routers.msapi-app.rule=Host(`api.mediascanter.co.id`)" # <- HTTPS
+      - "traefik.http.routers.msapi-app.entrypoints=web"
+      - "traefik.http.services.msapi-app.loadbalancer.server.port=80"
+      # - "traefik.http.routers.msapi-app.entrypoints=websecure" # <- HTTPS
+      # - "traefik.http.routers.msapi-app.tls.certresolver=myresolver" # <- HTTPS
+    environment:
+      TZ: 'Asia/Jakarta'
+    restart: unless-stopped
+    deploy:
+      replicas: ${replicas}
+    # ports:
+    #   - "8080:80"
+    volumes:
+      # - ./:/var/www/html
+      - ./src/msapi:/var/www/html
+    networks:
+      - msnetwork
+
+  # nginx:
+  #   # container_name: msapi-nginx
+  #   build: ./docker/nginx
+  #   environment:
+  #     TZ: 'Asia/Jakarta'
+  #   command: nginx -g "daemon off;"
+  #   image: msapi-nginx
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.msapi-app.rule=Host(`localhost`)"
+  #     # - "traefik.http.routers.msapi-app.rule=Host(`api.mediascanter.co.id`)" # <- HTTPS
+  #     - "traefik.http.routers.msapi-app.entrypoints=web"
+  #     - "traefik.http.services.msapi-app.loadbalancer.server.port=80"
+  #     # - "traefik.http.routers.msapi-app.entrypoints=websecure" # <- HTTPS
+  #     # - "traefik.http.routers.msapi-app.tls.certresolver=myresolver" # <- HTTPS
+  #   links:
+  #     - php
+  #   depends_on:
+  #     - php
+  #   restart: unless-stopped
+  #   deploy:
+  #     replicas: ${replicas}
+  #   # ports:
+  #   #   - "80:80"
+  #   volumes:
+  #     - ./logs/nginx:/var/log/nginx
+  #     - ./src/msapi:/var/www/html/msapi
+  #   networks:
+  #     - msnetwork
+
+  # php:
+  #   container_name: msapi-php
+  #   build: 
+  #     args:
+  #       user: msapi
+  #       uid: 1000
+  #     context: ./docker/php
+  #     dockerfile: Dockerfile
+  #   image: msapi-php
+  #   environment:
+  #     TZ: 'Asia/Jakarta'
+  #   restart: unless-stopped
+  #   ports:
+  #     - "9000:9000"
+  #   depends_on:
+  #     # - mysql
+  #     - redis
+  #   volumes:
+  #     - ./src/msapi:/var/www/html/msapi
+  #   working_dir: /var/www/html/msapi
+  #   # extra_hosts:
+  #     # - "host.docker.internal:host-gateway"
+  #     # - "127.0.0.1"
+  #   # environment:
+  #   #     - DATABASE_URL='mysql://ms:**MediaDBScanter321@157.245.59.127:3306/edi-testing-docker'
+  #   networks:
+  #     - msnetwork
+
+  queue:
+    container_name: msapi-queue
+    image: php-apache
+    environment:
+      TZ: 'Asia/Jakarta'
+    restart: unless-stopped
+    command: bash -c 'echo "Running the queue..." && php artisan queue:work --verbose --tries=3 --timeout=90'
+    depends_on:
+      traefik:
+        condition: service_started
+    volumes:
+      - ./src/msapi:/var/www/html
+      # - ./src/msapi:/usr/local/apache2/htdocs/msapi
+    # working_dir: /usr/local/apache2/htdocs/msapi
+    working_dir: /var/www/html
+    networks:
+      - msnetwork
+
+  # mysql:
+  #   image: mysql:8.0.35
+  #   # image: mysql/mysql-server:8.0
+  #   container_name: msapi-mysql
+  #   environment:
+  #     MYSQL_ROOT_PASSWORD: 'adminadmin'
+  #     MYSQL_DATABASE: msapi
+  #     MYSQL_USER: edi
+  #     MYSQL_PASSWORD: 'ediadmin'
+  #     TZ: 'Asia/Jakarta'
+  #   restart: unless-stopped
+  #   command: ['mysqld', '--character-set-server=utf8mb4', '--collation-server=utf8mb4_unicode_ci','--default-time-zone=+07:00']
+  #   ports:
+  #     - "3306:3306"
+  #   volumes:
+  #     - dbmsapi:/var/lib/mysql
+  #     - './docker/mysql/create-testing-database.sh:/docker-entrypoint-initdb.d/10-create-testing-database.sh'
+  #   networks:
+  #     - msnetwork
+
+  redis:
+    image: 'redis:alpine'
+    container_name: msapigabung-redis
+    environment:
+      TZ: 'Asia/Jakarta'
+    restart: always
+    ports:
+      - '14023:6379'
+    volumes:
+      - cache:/data
+    networks:
+      - msnetwork
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      retries: 3
+      timeout: 5s
+
+networks:
+  msnetwork:
+    # driver: bridge
+    # name: my-pre-existing-network
+    external: true
+
+volumes:
+  dbmsapi:
+    driver: local
+  cache:
+    driver: local
